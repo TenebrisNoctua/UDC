@@ -6,7 +6,7 @@ repository.
 
 ## Project Overview
 
-This project contains the sources for Luwow's UDC library, required as `@Luwow/udc`. Native buttons, menu bars and menu items are the [GUI library](https://github.com/Luwow-Project/GUI)'s, and the two work together: UDC's controls can go in the GUI library's windows, beside their native controls (see [With the GUI library](#with-the-gui-library)).
+This project contains the sources for Luwow's UDC library, required as `@Luwow/udc`.
 
 The included scripts in the scripts folder demonstrate the basic functionality of the library.
 
@@ -29,7 +29,7 @@ The controls are painted by the library itself, so they look and behave the same
 | `udc.createStroke(descriptor, parent)` | Outlines its parent |
 | `udc.createGradient(descriptor, parent)` | Colors its parent's background along a line |
 
-The parent is a `Window`, a GUI library window or another drawn control, given as the second argument or as the descriptor's `Parent`: `udc.createView({ Parent = window, ... })`. The constructor decides what's created, so descriptors only hold properties, and the returned control's properties (`Text`, `Position`, `BackgroundColor`, `ScrollPosition`, ...) can be changed afterwards.
+### Creating a simple window with a button and input
 
 ```luau
 local udc = require("@Luwow/udc")
@@ -54,7 +54,9 @@ udc.createTextButton({
 window:Show()
 ```
 
-Popups are windows too. One with an `Owner` stays above that window, and a `Modal` one turns the owner's input off while it's shown, like a WinForms or WinUI dialog. `PreventClose` leaves the close button to `OnCloseRequested`, so a script can ask before closing, and `OnClosed` fires once a window is closed, by the user or by `Close`. Each of these can be used from any thread, the window's own thread does the work. `udc.beep(kind)` plays the sound a message box of that kind plays.
+### Creating a popup
+
+Popups are windows too. One with an `Owner` stays above that window, and a `Modal` one turns the owner's input off while it's shown. `PreventClose` leaves the close button to `OnCloseRequested`, so a script can ask before closing, and `OnClosed` fires once a window is closed, by the user or by `Close`.
 
 ```luau
 local dialog = udc.createWindow({
@@ -75,13 +77,13 @@ dialog:Show()
 
 ### Code layout
 
-Each drawn control is its own class in its own files under `src/Controls`, the way the `Window` has its own files under `src/Windows` and `src/Mac`. A class's files hold everything about it, including its Luau members, its `RegisterClass` and the descriptor fields it reads:
+Each drawn control is its own class in its own files under `src/Controls`. A class's files hold everything about it, including its Luau members, its `RegisterClass` and the descriptor fields it reads:
 
 | Files | |
 |---|---|
 | `ControlObject.*` | The base class of every control: its place in the tree, placement, colors, painting, input and handlers, and the Luau members every control has |
 | `TextObject.*` | The base of the text controls, and their shared Luau members |
-| `ImageObject.*` | The base of the image controls: loading, scaling and drawing the image, and their shared Luau members |
+| `ImageObject.*` | The base of the image controls, and their shared Luau members |
 | `Corner.*` | Rounds its parent's corners |
 | `Gradient.*` | Colors its parent's background, and works out the gradient's stops |
 | `View.*`, `ScrollView.*`, `TextLabel.*`, `TextButton.*`, `TextInput.*`, `ImageLabel.*`, `ImageButton.*`, `ListLayout.*` | One per control |
@@ -90,11 +92,9 @@ Each drawn control is its own class in its own files under `src/Controls`, the w
 | `ControlLuau.*` | Helpers the classes' Luau members share: values, descriptor fields, member tables |
 | `Canvas.h`, `Scaling.*` | What a platform implements to draw controls, and the high-DPI conversion |
 
-Drawn controls aren't split per platform like the native ones, since they only draw through `ICanvas`: the platform parts are `GdiCanvas.*` on Windows and `CocoaCanvas.*` on macOS.
+Controls are drawn through the virtual `ICanvas` interface, and the platforms implement it. Under `src/`, you can find every platform's implementation, such as `GdiCanvas.*` on Windows and `CocoaCanvas.*` on macOS.
 
 ### Types
-
-Each kind of control is its own userdata type (`typeof(button) == "TextButton"`) with only its own members, and the Luau types in `scripts/udc.luau` build them with intersections the same way:
 
 ```
 BaseObject                 ClassName, Name, Destroyed, IsA(), Destroy(), from the baseobject library
@@ -124,9 +124,9 @@ BaseObject                 ClassName, Name, Destroyed, IsA(), Destroy(), from th
 
 `IsA` follows the same tree: a `TextButton` IsA `"TextObject"`, `"ControlObject"`, `"BaseGuiObject"` and `"BaseObject"`. 2D values such as `AbsoluteSize` are `Vector2`s: vectors with x and y used, and z left at 0.
 
-In C++, the classes mirror the Luau types: `TextButton` inherits `TextObject`, which inherits `ControlObject`, which inherits `BaseGuiObject` (`src/Controls/BaseGuiObject.*`), which inherits the baseobject library's `BaseObject`. `ListLayout`, `Corner`, `Padding`, `Stroke` and `Gradient` also inherit `ControlObject`, as helpers that aren't drawn, but declare `BaseGuiObject` as their `Super`, so scripts don't see them as `ControlObject`s. The window's Luau object, `LuauWindow` in `src/Handles.*`, is a `BaseGuiObject` too, and owns its window's `ControlView`. 
+In C++, the classes mirror the Luau types: `TextButton` inherits `TextObject`, which inherits `ControlObject`, which inherits `BaseGuiObject` (`src/Controls/BaseGuiObject.*`), which inherits the baseobject library's `BaseObject`. 
 
-Parents hold their children with plain pointers and keep them alive with `retain`; only a window's invisible root isn't a userdata. Each class's files have its Luau members, as functions taking the control, and its `RegisterClass` registers them with `RegisterGuiObject`, which adds the `BaseGuiObject` members to `RegisterObject`'s tables: the levels a class builds on give their members as tables (`ControlObject::properties<T>()`, `TextObject::properties<T>()`) the class extends with its own. Each class also reads its own descriptor fields in `readDescriptor`, after its base's. `ControlRegistry` calls every `RegisterClass` once, when the module starts.
+`ListLayout`, `Corner`, `Padding`, `Stroke` and `Gradient` also inherit `ControlObject`, as helpers that aren't drawn, but declare `BaseGuiObject` as their `Super`, so scripts don't see them as `ControlObject`s.
 
 ### Values
 
@@ -162,8 +162,15 @@ An `ImageLabel` shows an image file (PNG, JPEG, BMP or GIF):
 udc.createImageLabel({ Image = "Assets/Logo.png", ScaleType = "Fit", Size = UDim2.fromOffset(96, 96) }, window)
 ```
 
-`ScaleType` is `"Stretch"` (fills the control), `"Fit"` (the whole image, proportions kept, like XAML's `Stretch="Uniform"`), `"Crop"` (fills the control, proportions kept, the rest cut off), `"Slice"` (nine-sliced: the borders around `SliceCenter` keep their size times `SliceScale`, shrinking together when they don't fit) or `"Tile"` (repeated at `TileSize`, a UDim2 against the content). `ImageSize` is the image's size in pixels, `0, 0` when it couldn't be loaded. The image is drawn over the control's background and border, inside the border.
+`ScaleType` is:
 
+* `"Stretch"`: fills the control
+* `"Fit"`: fills the whole image, proportions kept
+* `"Crop"`: fills the control, proportions kept, the rest cut off
+* `"Slice"`: nine-sliced, the borders around `SliceCenter` keep their size times `SliceScale`, shrinking together when they don't fit
+* `"Tile"` repeated at `TileSize`, a UDim2 against the content. 
+
+`ImageSize` is the image's size in pixels, `0, 0` when it couldn't be loaded. The image is drawn over the control's background and border, inside the border.
 `ImageRectOffset` and `ImageRectSize` pick the part of the image shown, such as an icon from a sprite sheet (a size of `0, 0` shows it all), and `ImageColor` multiplies its colors, its alpha being the image's opacity. `Rotation` turns the image, not the control or its children, clockwise about its center, such as a loading spinner.
 
 ```luau
@@ -171,11 +178,11 @@ udc.createImageLabel({ Image = "assets/icons.png", ImageRectOffset = vector.crea
 udc.createImageLabel({ Image = "assets/panel.png", ScaleType = "Slice", SliceCenter = Rect.new(10, 10, 12, 12) }, window)
 ```
 
-Images are loaded once per window and shared by every control showing the same path. The shared code lives in `ImageObject`, which `ImageButton` adds the button behaviour to: `OnActivated` when it's clicked, and while the pointer is over it or pressing it, `HoverImage` or `PressedImage` and `HoverColor` or `PressedColor` in place of `Image` and `BackgroundColor`, when they're set.
+Images are loaded once per window and shared by every control showing the same path.
 
 ### Gradients
 
-A `Gradient` placed in a control colors its background along a line: at each point the background's color is multiplied by the gradient's, and its opacity by the gradient's. Text and images aren't colored.
+A `Gradient` placed in a control colors its background along a line, at each point the background's color is multiplied by the gradient's, and its opacity by the gradient's.
 
 ```luau
 local banner = udc.createView({ BackgroundColor = Color.new(1, 1, 1), Size = UDim2.fromOffset(200, 60) }, window)
@@ -196,7 +203,7 @@ udc.createCorner({ CornerRadius = UDim.new(0.5, 0) }, button)    -- half the sho
 udc.createCorner({ CornerRadius = 0, TopLeftRadius = 12, TopRightRadius = 12 }, tab)    -- a tab's top
 ```
 
-Each radius takes a UDim or a number of pixels, 8 pixels by default. Its scale is a fraction of the control's shorter side. When the radii along a side add up to more than the side, every radius is scaled down by the same factor, so the shape keeps its proportions. Without a Corner, a control's corners are square, and drawn with the platform's fast path. Only a Corner makes them round, drawn anti-aliased. Like a `ListLayout`, a Corner isn't drawn and can't have children.
+Each radius takes a UDim or a number of pixels, 8 pixels by default. Its scale is a fraction of the control's shorter side. When the radii along a side add up to more than the side, every radius is scaled down by the same factor, so the shape keeps its proportions.
 
 ### Fonts
 
@@ -254,8 +261,6 @@ Every drawn control takes `OnEnter`, `OnLeft`, `OnPressed` and `OnUnPressed` han
 
 `OnEnter` and `OnLeft` follow hovering pointers over the top control under them; a pointer that doesn't hover, such as a touch, enters a control as it presses it and leaves as it lifts. `OnPressed` fires when a press goes down on a control and `OnUnPressed` when it comes back up, before a `TextButton`'s `OnActivated`.
 
-Which input fires which event is configured in one place, `src/Controls/Input.*`, so it's the same on every platform. The platform turns its messages into `PointerInput`s (position, `PointerKind`, `PointerButton`, modifiers) and finds the system's `InputCapabilities` (mouse, touch, pen) in its own `Input` files.
-
 `OnInputBegan` and `OnInputEnded` are the raw inputs, every button's press on a control and its release, wherever the pointer is by then, with an input table of `InputType` (`"MouseButton1"`, `"MouseButton2"`, `"MouseButton3"` or `"Touch"`), `Position` and `Pointer`.
 
 Only active controls are hit. The top active control under a pointer gets its events, and one that isn't lets them through to what's behind it, so a label inside a button leaves the press to the button, and an empty overlay doesn't block what's under it. Buttons, inputs and scroll views are active, and so is a control given a pointer or input handler in its descriptor; `Active` overrides that. The wheel goes to whatever is under the pointer, active or not.
@@ -276,7 +281,7 @@ Every gui object has a `Parent` and `FetchChildren()`. The controls at the top o
 
 ## With the GUI library
 
-The GUI library makes native windows, buttons, menu bars and menu items, and UDC's controls can go in its windows beside them. Given a GUI window as their `Parent`, drawn controls are drawn into it:
+The [GUI](https://github.com/Luwow-Project/GUI) library makes native windows, buttons, menu bars and menu items, and UDC's controls can go in its windows beside them. Given a GUI window as their `Parent`, drawn controls are drawn into it:
 
 ```luau
 local gui = require("@Luwow/gui")

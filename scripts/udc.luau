@@ -2,14 +2,13 @@
 
 local baseobject = require("@Luwow/baseobject")
 local color = require("@Luwow/color")
-local gui = require("@Luwow/gui")
 local rect = require("@Luwow/rect")
 local signal = require("@Luwow/signal")
 local udim = require("@Luwow/udim")
 local udim2 = require("@Luwow/udim2")
 
 --[=[
-	The value types come from their own libraries: color, rect, udim and udim2.
+    UDC uses other libraries as dependencies, including their types.
 ]=]
 export type BaseObject = baseobject.BaseObject
 export type Color = color.Color
@@ -21,63 +20,46 @@ export type UDim2Like = udim2.UDim2Like
 export type Signal<T...> = signal.Signal<T...>
 
 --[=[
-	The descriptor types for each native component. Native positions and sizes are vectors of pixels.
-]=]
-
-export type WindowDescriptor = {
-    Title: string,
-    Name: string?,
-    -- Where the window opens on the screen.
-    Position: vector?,
-    Size: vector?,
-    -- Whether the user can resize and maximize the window, true when left out.
-    Resizable: boolean?,
-    -- An .ico, or a PNG, JPEG, BMP or GIF
-    Icon: string?,
-    -- The size of the area inside the frame, where the controls are. Given, it decides the window's
-    -- size instead of Size.
-    ClientSize: vector?,
-    -- Opens in the middle of its Owner, or of the screen without one, instead of at Position.
-    Centered: boolean?,
-    -- Whether it can be minimized, true when left out.
-    Minimizable: boolean?,
-    TopMost: boolean?,
-    Owner: Window?,
-    Modal: boolean?,
-    PreventClose: boolean?,
-    -- Called when the user asks to close the window, such as with its close button. It closes
-    -- afterwards unless PreventClose is set.
-    OnCloseRequested: (() -> ())?,
-    -- Called once the window is closed, by the user or by Close. Destroy doesn't call it.
-    OnClosed: (() -> ())?,
-    -- Called when the window becomes the active one, such as when it's clicked or shown.
-    OnFocused: (() -> ())?,
-}
-
---[=[
 	The types for each native component object.
 ]=]
 
 --[=[
-	A window is the top of its tree: its drawn controls are its children, and its Parent is always nil.
-	Destroy destroys its controls and closes it. Close only closes the native window, its controls are
-	left until it's destroyed, and Hide hides it so it can be shown again.
+    User drawn control class inheritance tree:
 
-	Popups such as dialogs are windows with an Owner: they stay above it and are minimized with it.
-	A Modal one also turns its owner's input off while it's shown, and back on once it's hidden or
-	closed. Sizes are in logical pixels.
+	BaseObject
+	└─ BaseGuiObject
+	   ├─ Window
+	   ├─ ListLayout
+	   ├─ Corner
+	   ├─ Padding
+	   ├─ Stroke
+	   ├─ Gradient
+	   └─ ControlObject
+	      ├─ View
+	      ├─ ScrollView
+	      ├─ ImageObject
+	      │  ├─ ImageLabel
+	      │  └─ ImageButton
+	      └─ TextObject
+	         ├─ TextLabel
+	         ├─ TextButton
+	         └─ TextInput
+]=]
+
+--[=[
+	A window is the top of an UI tree: its drawn controls are its children, and its Parent is always nil.
 ]=]
 export type Window = BaseGuiObject & {
     read ClassName: "Window",
-
+    -- The title of the window.
     Title: string,
     -- The window this one belongs to, nil for none.
     Owner: Window?,
-    -- Whether the Owner takes no input while it's shown, like a dialog's.
+    -- Whether the window lets the input pass to the owner window.
     Modal: boolean,
     -- Whether the window takes input.
     Enabled: boolean,
-    -- Whether it stays above the windows of other programs.
+    -- Whether the window stays above the windows of other programs.
     TopMost: boolean,
     -- Whether the close button only fires OnCloseRequested, leaving the closing to the script.
     PreventClose: boolean,
@@ -117,45 +99,11 @@ export type Window = BaseGuiObject & {
 }
 
 --[=[
-	A window of the gui library, drawn controls can go in it too, beside its
-	native buttons and menus. UDC draws into it through a Window of its own, the one udc.attach gives
-	and the controls' Parent. That Window's Destroy only stops the drawing, and it's destroyed itself
-	once the native window closes. Closing it, and asking to stay with the gui library.
-]=]
-export type NativeWindow = gui.Window
-
---[=[
-	User drawn controls. They're painted by Luwow itself instead of being native widgets, so they
-	look the same on every platform. Each kind of control is its own type, built from the ones it
-	inherits from with intersections:
-
-	BaseObject             (from the baseobject library: Name, ClassName, Destroyed, IsA, Destroy)
-	└─ BaseGuiObject       (Parent, FetchChildren, BindToPropertyChanged)
-	   ├─ Window
-	   ├─ ListLayout
-	   ├─ Corner
-	   ├─ Padding
-	   ├─ Stroke
-	   ├─ Gradient
-	   └─ ControlObject
-	      ├─ View
-	      ├─ ScrollView
-	      ├─ ImageObject
-	      │  ├─ ImageLabel
-	      │  └─ ImageButton
-	      └─ TextObject
-	         ├─ TextLabel
-	         ├─ TextButton
-	         └─ TextInput
-]=]
-
---[=[
-	What every gui object has: windows, drawn controls and their helpers.
+	Common properties every gui object contains.
 ]=]
 export type BaseGuiObject = BaseObject & {
     -- The Window or ControlObject it's in, nil for a window. Setting it moves the object and its
-    -- descendants, to another window too. It can't be set to nil, Destroy removes an object, and a
-    -- window's Parent can't be set.
+    -- descendants to another window. It can't be set to nil.
     Parent: Parent?,
 
     --[=[
@@ -167,11 +115,6 @@ export type BaseGuiObject = BaseObject & {
     --[=[
 		Returns a signal fired when the property's value changes, the same one each time for a
 		property. It fires without arguments, read the property for the new value.
-
-		Sets from scripts fire it right away. Changes made inside the library, such as typing in a
-		TextInput, scrolling, focus, or a layout moving a control (AbsolutePosition, AbsoluteSize), fire
-		it after the window's next paint or input event. Setting a property to an equal value isn't a
-		change.
 
 		@param propertyName The property to watch, raising for unknown properties and methods.
 	]=]
@@ -211,13 +154,13 @@ export type Flex = {
 }
 
 --[=[
-	A handler for a pointer event: where the pointer is in the window, in pixels like AbsolutePosition,
+	A handler for a pointer event, where the pointer is in the window, in pixels like AbsolutePosition,
 	and what kind of pointer it is.
 ]=]
 export type PointerHandler = (position: vector, pointer: PointerKind) -> ()
 
 --[=[
-	An input, given to OnInputBegan and OnInputEnded: which button or touch, where it is in the window in
+	An input, which button or touch, where it is in the window in
 	pixels like AbsolutePosition, and what kind of pointer it is.
 ]=]
 export type InputType = "MouseButton1" | "MouseButton2" | "MouseButton3" | "Touch"
@@ -357,7 +300,7 @@ export type TextLabel = TextObject & {
 }
 
 export type TextButton = TextObject & {
-    read ClassName: "TextButton"
+    read ClassName: "TextButton",
     HoverColor: Color,
     PressedColor: Color
 }
@@ -367,8 +310,7 @@ export type TextInput = TextObject & {
     PlaceholderText: string,
     PlaceholderColor: Color,
     SelectionColor: Color,
-    -- The border while the input is focused, blue by default. false draws none, as for a TextInput that
-    -- shows its focus some other way.
+    -- The border while the input is focused, blue by default. false draws none.
     FocusedBorderColor: Color | false,
     -- "Password" shows a dot for each character, and blocks copying and cutting. Text is still the real text.
     TextInputType: TextInputType,
@@ -410,8 +352,7 @@ export type ListLayout = BaseGuiObject & {
 }
 
 --[=[
-	Rounds its parent's corners, each corner has its own radius. 
-    Without one, a control's corners are square.
+	Rounds its parent's corners, each corner has its own radius.
 ]=]
 export type Corner = BaseGuiObject & {
     read ClassName: "Corner",
@@ -429,8 +370,6 @@ export type Corner = BaseGuiObject & {
 ]=]
 export type Padding = BaseGuiObject & {
     read ClassName: "Padding",
-    -- Each side's scale is a fraction of the parent's size along it: the width for left and right,
-    -- the height for top and bottom.
     PaddingTop: UDim,
     PaddingBottom: UDim,
     PaddingLeft: UDim,
@@ -466,15 +405,15 @@ export type Keypoint<T> = {
 	Colors its parent's background along a line, at each point the background's
 	color is multiplied by the gradient's, and its opacity by the gradient's.
 
-	Color can be set to a Color, a list of Colors spread evenly, or keypoints, and Transparency to a number,
-	a list of numbers or keypoints. They read back as keypoints, sorted by Time.
+    Color can be set to a Color, or a list of keypoints.
+	They read back as keypoints, sorted by Time.
 ]=]
 export type Gradient = BaseGuiObject & {
     read ClassName: "Gradient",
     -- White by default.
-    Color: { Keypoint<Color> },
+    Color: { Keypoint<Color> } | Color,
     -- 0 by default.
-    Transparency: { Keypoint<number> },
+    Transparency: { Keypoint<number> } | number,
     -- Degrees, clockwise from left to right.
     Rotation: number,
     -- Moves the gradient by a fraction of the parent's size, its ends' colors filling what it uncovers.
@@ -483,13 +422,42 @@ export type Gradient = BaseGuiObject & {
 }
 
 --[=[
-	Descriptors set a new control's properties, with the same names. Every field is optional, the
-	constructor decides what kind of control is made.
+	The descriptor types for each native component.
 ]=]
 
+export type WindowDescriptor = {
+    Title: string,
+    Name: string?,
+    -- Where the window opens on the screen.
+    Position: vector?,
+    Size: vector?,
+    -- Whether the user can resize and maximize the window, true when left out.
+    Resizable: boolean?,
+    -- An .ico, or a PNG, JPEG, BMP or GIF
+    Icon: string?,
+    -- The size of the area inside the frame, where the controls are. Given, it decides the window's
+    -- size instead of Size.
+    ClientSize: vector?,
+    -- Opens in the middle of its Owner, or of the screen without one, instead of at Position.
+    Centered: boolean?,
+    -- Whether it can be minimized, true when left out.
+    Minimizable: boolean?,
+    TopMost: boolean?,
+    -- The owner of the Window, which can be another Window.
+    Owner: Window?,
+    -- Whether the window lets the input pass to the owner window.
+    Modal: boolean?,
+    PreventClose: boolean?,
+    -- Called when the user asks to close the window, such as with its close button. It closes
+    -- afterwards unless PreventClose is set.
+    OnCloseRequested: (() -> ())?,
+    -- Called once the window is closed, by the user or by Close. Destroy doesn't call it.
+    OnClosed: (() -> ())?,
+    -- Called when the window becomes the active one, such as when it's clicked or shown.
+    OnFocused: (() -> ())?
+}
+
 export type BaseObjectDescriptor = {
-    -- The Window or drawn control to put it in, unless it's given as the create function's second
-    -- argument. Giving both is fine when they're the same object.
     Parent: Parent?,
     Name: string?
 }
@@ -514,9 +482,6 @@ export type ControlObjectDescriptor = BaseObjectDescriptor & {
     AutomaticSize: AutomaticSize?,
 
     --[=[
-		Pointer events. Which inputs fire them is set per platform, by what input hardware the system
-		has: a mouse's primary button, a touch and a pen tip press by default.
-
 		OnEnter and OnLeft fire as a hovering pointer (a mouse or a pen) moves over and off the control,
 		the top one under it. A pointer that doesn't hover, such as a touch, enters as it presses and
 		leaves as it lifts.
@@ -617,7 +582,6 @@ export type ListLayoutDescriptor = BaseObjectDescriptor & {
     ItemLineAlignment: ItemLineAlignment?,
 }
 
--- CornerRadius is applied first, so the corners given on their own win over it
 export type CornerDescriptor = BaseObjectDescriptor & {
     CornerRadius: UDimLike?,
     TopLeftRadius: UDimLike?,
@@ -647,8 +611,7 @@ export type StrokeDescriptor = BaseObjectDescriptor & {
     StrokePosition: StrokePosition?
 }
 
--- Drawn controls go in a Window, a gui library's window or another drawn control
-export type Parent = Window | NativeWindow | ControlObject
+export type Parent = Window | ControlObject
 
 export type Udc = {
     --[=[
@@ -667,7 +630,7 @@ export type Udc = {
 		@param window A window from gui.
 		@return The UDC Window drawing into it.
 	]=]
-    attach: (window: NativeWindow) -> Window,
+    attach: (window: any) -> Window,
 
     --[=[
 		Plays the system's sound for a message of the kind, the one dialogs play.
