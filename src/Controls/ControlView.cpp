@@ -1,4 +1,5 @@
 #include "ControlView.h"
+#include "PackageFiles.h"
 #include "ListLayout.h"
 #include "Stroke.h"
 #include "View.h"
@@ -243,11 +244,9 @@ namespace Luwow::Udc {
         auto cached = images.find(source.path);
         if (cached != images.end()) return cached->second;
 
-        Luwow::Engine::Message read;
-        read.topic = Luwow::Engine::Topics::PackageRead;
-        read.data = source.path;
-        std::shared_ptr<ICanvasImage> loaded = (luauHost->request(read) && read.result == 1)
-            ? surface->decodeImage(read.data) : surface->loadImage(source.path);
+        std::string bytes;
+        std::shared_ptr<ICanvasImage> loaded = readPackageFile(luauHost, source.path, bytes)
+            ? surface->decodeImage(bytes) : surface->loadImage(source.path);
         images[source.path] = loaded;
         return loaded;
     }

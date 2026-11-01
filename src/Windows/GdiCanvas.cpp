@@ -298,18 +298,8 @@ namespace Luwow::Udc {
         return std::make_shared<GdiImage>(std::move(bitmap));
     }
 
-    // An .ico picks its closest size itself. Other images are scaled to the size, keeping their proportions.
-    HICON loadIconFile(const std::string& path, int size) {
-        std::wstring wide = toWide(path);
-        size_t dot = path.find_last_of('.');
-        std::string extension = dot == std::string::npos ? "" : path.substr(dot);
-        for (char& c : extension) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-        if (extension == ".ico") {
-            return static_cast<HICON>(LoadImageW(nullptr, wide.c_str(), IMAGE_ICON, size, size, LR_LOADFROMFILE));
-        }
-
-        startGdiplus();
-        Gdiplus::Bitmap file(wide.c_str());
+    // An image scaled to the icon's size, keeping its proportions
+    static HICON iconFromImage(Gdiplus::Bitmap& file, int size) {
         if (file.GetLastStatus() != Gdiplus::Ok || file.GetWidth() == 0 || file.GetHeight() == 0) return nullptr;
 
         Gdiplus::Bitmap scaled(size, size, PixelFormat32bppARGB);
@@ -324,6 +314,71 @@ namespace Luwow::Udc {
         }
         HICON icon = nullptr;
         scaled.GetHICON(&icon);
+        return icon;
+    }
+
+    HICON loadIconFile(const std::string& path, int size) {
+        std::wstring wide = toWide(path);
+        size_t dot = path.find_last_of('.');
+        std::string extension = dot == std::string::npos ? "" : path.substr(dot);
+        for (char& c : extension) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        if (extension == ".ico") {
+            return static_cast<HICON>(LoadImageW(nullptr, wide.c_str(), IMAGE_ICON, size, size, LR_LOADFROMFILE));
+        }
+
+        startGdiplus();
+        Gdiplus::Bitmap file(wide.c_str());
+        return iconFromImage(file, size);
+    }
+
+    static HICON iconFromIcoData(const std::string& bytes, int size) {
+        auto read16 = [&](size_t at) { return static_cast<uint32_t>(static_cast<uint8_t>(bytes[at]) | (static_cast<uint8_t>(bytes[at + 1]) << 8)); };
+        auto read32 = [&](size_t at) { return read16(at) | (read16(at + 2) << 16); };
+
+        size_t count = read16(4);
+        if (bytes.size() < 6 + count * 16) return nullptr;
+        size_t best = count;
+        uint32_t bestWidth = 0, bestDepth = 0;
+        for (size_t i = 0; i < count; ++i) {
+            size_t entry = 6 + i * 16;
+            uint32_t width = static_cast<uint8_t>(bytes[entry]);
+            if (width == 0) width = 256;
+            uint32_t depth = read16(entry + 6);
+            uint32_t length = read32(entry + 8);
+            uint32_t offset = read32(entry + 12);
+            if (length == 0 || offset > bytes.size() || length > bytes.size() - offset) continue;
+
+            bool better;
+            if (best == count) better = true;
+            else if ((width >= static_cast<uint32_t>(size)) != (bestWidth >= static_cast<uint32_t>(size))) better = width >= static_cast<uint32_t>(size);
+            else if (width != bestWidth) better = width >= static_cast<uint32_t>(size) ? width < bestWidth : width > bestWidth;
+            else better = depth > bestDepth;
+            if (better) {
+                best = i;
+                bestWidth = width;
+                bestDepth = depth;
+            }
+        }
+        if (best == count) return nullptr;
+
+        size_t entry = 6 + best * 16;
+        std::vector<BYTE> image(bytes.begin() + read32(entry + 12), bytes.begin() + read32(entry + 12) + read32(entry + 8));
+        return CreateIconFromResourceEx(image.data(), static_cast<DWORD>(image.size()), TRUE, 0x00030000, size, size, LR_DEFAULTCOLOR);
+    }
+
+    HICON loadIconData(const std::string& bytes, int size) {
+        bool isIco = bytes.size() >= 6 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 1 && bytes[3] == 0;
+        if (isIco) return iconFromIcoData(bytes, size);
+
+        startGdiplus();
+        IStream* stream = SHCreateMemStream(reinterpret_cast<const BYTE*>(bytes.data()), static_cast<UINT>(bytes.size()));
+        if (!stream) return nullptr;
+        HICON icon = nullptr;
+        {
+            Gdiplus::Bitmap file(stream);
+            icon = iconFromImage(file, size);
+        }
+        stream->Release();
         return icon;
     }
 

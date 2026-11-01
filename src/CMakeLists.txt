@@ -55,6 +55,7 @@ if(WIN32)
             IUdcModule.h
             Handles.cpp
             Handles.h
+            PackageFiles.h
             ${GUI_CONTROL_SOURCES}
             Windows/Dpi.cpp
             Windows/Dpi.h
@@ -88,6 +89,7 @@ elseif(APPLE)
             IUdcModule.h
             Handles.cpp
             Handles.h
+            PackageFiles.h
             ${GUI_CONTROL_SOURCES}
             Mac/CocoaCanvas.mm
             Mac/CocoaCanvas.h

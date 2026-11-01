@@ -159,7 +159,7 @@ void UdcModule::setHost(ILuauHost* host) {
 IWindow* UdcModule::createWindow(const WindowDescriptor& descriptor) {
     createdWindow = true;
     ++openWindows;
-    return new Window(descriptor);
+    return new Window(descriptor, host);
 }
 
 // Not counted among the open windows: the other library's message loop is the one waiting for it

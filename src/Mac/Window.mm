@@ -5,6 +5,7 @@
 #include "Window.h"
 #include "CocoaCanvas.h"
 #include "Controls/ControlView.h"
+#include "PackageFiles.h"
 #include <stdexcept>
 #include <string>
 #include "lua.h"
@@ -257,7 +258,7 @@ static int openWindows = 0;
 
 namespace Luwow::Udc {
 
-Window::Window(const WindowDescriptor& descriptor) : descriptor(descriptor), title(descriptor.Title), topMost(descriptor.TopMost) {
+Window::Window(const WindowDescriptor& descriptor, Luwow::Engine::ILuauHost* host) : descriptor(descriptor), title(descriptor.Title), topMost(descriptor.TopMost) {
     ++openWindows;
     @autoreleasepool {
         NSScreen* screen = [NSScreen mainScreen];
@@ -273,7 +274,11 @@ Window::Window(const WindowDescriptor& descriptor) : descriptor(descriptor), tit
         NSWindow* window = [[NSWindow alloc] initWithContentRect:content styleMask:style backing:NSBackingStoreBuffered defer:NO];
         [window setTitle:[NSString stringWithUTF8String:descriptor.Title.c_str()]];
         if (!descriptor.Icon.empty()) {
-            NSImage* icon = [[NSImage alloc] initWithContentsOfFile:[NSString stringWithUTF8String:descriptor.Icon.c_str()]];
+            // From the package being run, or else the disk
+            std::string bytes;
+            NSImage* icon = readPackageFile(host, descriptor.Icon, bytes)
+                ? [[NSImage alloc] initWithData:[NSData dataWithBytes:bytes.data() length:bytes.size()]]
+                : [[NSImage alloc] initWithContentsOfFile:[NSString stringWithUTF8String:descriptor.Icon.c_str()]];
             if (icon) [NSApp setApplicationIconImage:icon];
         }
         [window setReleasedWhenClosed:NO];

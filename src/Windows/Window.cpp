@@ -3,6 +3,7 @@
 #include "Dpi.h"
 #include "Input.h"
 #include "Controls/ControlView.h"
+#include "PackageFiles.h"
 #include <algorithm>
 #include <iostream>
 #include <string>
@@ -17,7 +18,7 @@ namespace Luwow::Udc {
 constexpr UINT WM_LUWOW_CALL = WM_APP + 0x4D;
 
 // WS_CLIPCHILDREN keeps drawn controls from painting over native ones.
-Window::Window(const WindowDescriptor& descriptor) : descriptor(descriptor), title(descriptor.Title), topMost(descriptor.TopMost) {
+Window::Window(const WindowDescriptor& descriptor, Luwow::Engine::ILuauHost* host) : descriptor(descriptor), title(descriptor.Title), topMost(descriptor.TopMost) {
     DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
     if (!descriptor.Resizable) style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
     if (!descriptor.Minimizable) style &= ~WS_MINIMIZEBOX;
@@ -46,7 +47,7 @@ Window::Window(const WindowDescriptor& descriptor) : descriptor(descriptor), tit
 
     // The descriptor's size is at 96 DPI. The monitor is only known once the window exists, so it's resized now.
     dpi = Dpi::forWindow(hWnd);
-    loadIcons();
+    loadIcons(host);
     if (dpi != Dpi::Default) {
         SetWindowPos(hWnd, NULL, 0, 0, Dpi::scale(descriptor.Width, dpi), Dpi::scale(descriptor.Height, dpi),
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -264,10 +265,13 @@ Window::~Window() {
     if (bigIcon) DestroyIcon(bigIcon);
 }
 
-void Window::loadIcons() {
+void Window::loadIcons(Luwow::Engine::ILuauHost* host) {
     if (descriptor.Icon.empty()) return;
-    HICON small = loadIconFile(descriptor.Icon, Dpi::scale(16, dpi));
-    HICON big = loadIconFile(descriptor.Icon, Dpi::scale(32, dpi));
+    std::string bytes;
+    bool packaged = readPackageFile(host, descriptor.Icon, bytes);
+    auto load = [&](int size) { return packaged ? loadIconData(bytes, size) : loadIconFile(descriptor.Icon, size); };
+    HICON small = load(Dpi::scale(16, dpi));
+    HICON big = load(Dpi::scale(32, dpi));
     if (small) SendMessageW(hWnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small));
     if (big) SendMessageW(hWnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big));
     if (smallIcon) DestroyIcon(smallIcon);

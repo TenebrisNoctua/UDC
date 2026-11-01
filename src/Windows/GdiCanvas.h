@@ -77,6 +77,8 @@ namespace Luwow::Udc {
 
     // Loads an .ico, or an image, as an icon of size by size pixels.
     HICON loadIconFile(const std::string& path, int size);
+    // The same from a file's bytes, such as a package's
+    HICON loadIconData(const std::string& bytes, int size);
 
     // UTF-8 and UTF-16 conversions for the wide Win32 APIs
     std::wstring toWide(const std::string& text);

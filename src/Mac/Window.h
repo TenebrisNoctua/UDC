@@ -10,7 +10,7 @@ class CocoaSurface;
 
 class Window : public IWindow {
 public:
-    Window(const WindowDescriptor& descriptor);
+    Window(const WindowDescriptor& descriptor, Luwow::Engine::ILuauHost* host);
     // Draws into another library's NSWindow, through a view of its own inside the window's content view
     explicit Window(void* attachedWindow);
     ~Window() override;
@@ -46,8 +46,10 @@ public:
     void* getNativeContentView() const;
 
 private:
+#ifdef __OBJC__
     // Runs work on the main thread
     void dispatch(void (^work)());
+#endif
     // A shown modal window's owner takes input again
     void releaseOwner();
 

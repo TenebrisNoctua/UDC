@@ -13,7 +13,7 @@ class GdiSurface;
 
 class Window : public IWindow {
 public:
-    Window(const WindowDescriptor& descriptor);
+    Window(const WindowDescriptor& descriptor, Luwow::Engine::ILuauHost* host);
     // Draws into another library's window, through a subclass of it rather than a window of its own
     explicit Window(HWND attached);
     ~Window();
@@ -81,10 +81,10 @@ private:
 
     UINT dpi = 96;
 
-    // The descriptor's icon, at the title bar's and the taskbar's sizes
+    // The descriptor's icon, at the title bar's and the taskbar's sizes, from the package or else the disk
     HICON smallIcon = nullptr;
     HICON bigIcon = nullptr;
-    void loadIcons();
+    void loadIcons(Luwow::Engine::ILuauHost* host);
 };
 
 } // namespace Luwow::Udc
