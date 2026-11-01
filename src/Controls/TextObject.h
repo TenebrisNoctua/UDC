@@ -73,6 +73,16 @@ namespace Luwow::Udc {
         }
 
     private:
+        // The last line fitLine cut, which a paint asks for again until the text or its box changes
+        struct FittedLine {
+            std::string line;
+            int width = -1;
+            float scale = 0;
+            Font font;
+            std::string result;
+        };
+        mutable FittedLine fitted;
+
         // The Luau properties
         struct Luau {
             static int getText(lua_State* L, TextObject& object);

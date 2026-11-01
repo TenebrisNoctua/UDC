@@ -86,19 +86,42 @@ namespace Luwow::Udc {
         return lines;
     }
 
-    // Whole characters are dropped from the end, and the spaces before the ellipsis with them
+    // Whole characters are dropped from the end, and the spaces before the ellipsis with them. The longest
+    // start that fits is found by halving, as a shorter start is never wider, and the last line fitted is kept.
     std::string TextObject::fitLine(const std::string& line, int width) const {
-        if (!truncated || !view || view->measureText(line, font) <= width) return line;
+        if (!truncated || !view) return line;
+        float scale = view->scaler().scale();
+        if (fitted.width == width && fitted.scale == scale && fitted.line == line && fitted.font.family == font.family &&
+            fitted.font.size == font.size && fitted.font.bold == font.bold && fitted.font.italic == font.italic) {
+            return fitted.result;
+        }
+
         static const std::string ellipsis = "\xE2\x80\xA6";
-        size_t end = line.size();
-        while (end > 0) {
-            end = previousCharacter(line, end);
+        auto candidate = [&](size_t end) {
             size_t kept = end;
             while (kept > 0 && line[kept - 1] == ' ') --kept;
-            std::string candidate = line.substr(0, kept) + ellipsis;
-            if (view->measureText(candidate, font) <= width) return candidate;
+            return line.substr(0, kept) + ellipsis;
+        };
+
+        std::string result = line;
+        if (view->measureText(line, font) > width) {
+            std::vector<size_t> ends;
+            for (size_t end = line.size(); end > 0;) {
+                end = previousCharacter(line, end);
+                ends.push_back(end);
+            }
+            size_t low = 0;
+            size_t high = ends.size();
+            while (low < high) {
+                size_t middle = low + (high - low) / 2;
+                if (view->measureText(candidate(ends[middle]), font) <= width) high = middle;
+                else low = middle + 1;
+            }
+            result = low < ends.size() ? candidate(ends[low]) : std::string();
         }
-        return view->measureText(ellipsis, font) <= width ? ellipsis : std::string();
+
+        fitted = FittedLine{ line, width, scale, font, result };
+        return result;
     }
 
     void TextObject::drawLines(ICanvas& canvas, const Rect& area, const std::string& value, uint32_t color) const {

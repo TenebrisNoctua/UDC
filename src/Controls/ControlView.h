@@ -90,6 +90,9 @@ namespace Luwow::Udc {
         // destroyed by the handler, so callers shouldn't use it afterwards.
         void fireEvent(ControlObject& control, const char* event, const std::function<int(lua_State*)>& pushArgs = nullptr);
 
+        // Called by the platform window before it starts a paint, so what the watched signals' handlers change
+        // is painted with it instead of asking for another paint
+        void preparePaint();
         // Called by the platform window. The canvas and positions are in device pixels, wheel amounts are logical.
         void paint(ICanvas& canvas);
         void pointerDown(const PointerInput& input);
@@ -152,6 +155,9 @@ namespace Luwow::Udc {
         // Ids of the controls with property signals
         std::unordered_set<uint64_t> watched;
         int entryDepth = 0;
+        bool invalidatedInEntry = false;
+        bool watchPending = false;
+        void checkPendingWatched();
 
         ControlObject* hoveredControl = nullptr;
         ControlObject* pressedControl = nullptr;

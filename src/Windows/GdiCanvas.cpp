@@ -169,6 +169,7 @@ namespace Luwow::Udc {
     }
 
     void GdiSurface::paint(ControlView& host) {
+        host.preparePaint();
         PAINTSTRUCT paint;
         HDC windowDc = BeginPaint(hwnd, &paint);
 

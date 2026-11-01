@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <list>
 #include <map>
@@ -68,6 +69,21 @@ namespace Luwow::Udc::DirectWriteText {
         size_t bytes = 0;
     };
 
+    struct GlyphMask {
+        int left = 0;
+        int top = 0;
+        int width = 0;
+        int height = 0;
+        std::vector<uint8_t> coverage;
+    };
+
+    // How many positions within a pixel a glyph is drawn at, along each axis
+    static constexpr int GlyphPhases = 32;
+
+    // A glyph of a font face at a size and a vertical fraction, drawn at every horizontal fraction at once
+    using GlyphKey = std::tuple<IDWriteFontFace*, float, UINT16, int>;
+    using GlyphPositions = std::array<GlyphMask, GlyphPhases>;
+
     // The factories and the fonts, shared by every window. 
     struct State {
         std::mutex mutex;
@@ -80,6 +96,10 @@ namespace Luwow::Udc::DirectWriteText {
         std::vector<std::wstring> files;
         std::map<std::tuple<std::wstring, bool, bool, int>, ComPtr<IDWriteTextFormat>> formats;
         MaskCache masks;
+        // The glyphs texts are put together from. Their faces are held, so a key's address is never reused.
+        std::map<GlyphKey, GlyphPositions> glyphs;
+        std::map<IDWriteFontFace*, ComPtr<IDWriteFontFace>> glyphFaces;
+        size_t glyphBytes = 0;
     };
 
     // At exit COM and the factories' DLLs may already be gone, and releasing into them
@@ -106,6 +126,9 @@ namespace Luwow::Udc::DirectWriteText {
         s.collection = collection;
         s.formats.clear();
         s.masks.clear();
+        s.glyphs.clear();
+        s.glyphFaces.clear();
+        s.glyphBytes = 0;
         return true;
     }
 
@@ -374,6 +397,164 @@ namespace Luwow::Udc::DirectWriteText {
         return table;
     }
 
+    // A glyph drawn at each horizontal fraction of a pixel side by side in one pass, each cut to its ink
+    static const GlyphPositions* glyphPositions(State& s, IDWriteFontFace* face, float size, UINT16 index, int phaseY) {
+        GlyphKey key{ face, size, index, phaseY };
+        auto found = s.glyphs.find(key);
+        if (found != s.glyphs.end()) return &found->second;
+
+        // Past the limit the glyphs are dropped together, and drawn again as they're needed
+        if (s.glyphBytes > 16 * 1024 * 1024) {
+            s.glyphs.clear();
+            s.glyphFaces.clear();
+            s.glyphBytes = 0;
+        }
+
+        int cell = static_cast<int>(std::ceil(size * 3)) + 4;
+        float originX = std::ceil(size);
+        float originY = std::ceil(size * 2);
+        Target* target = targetFor(s, cell * GlyphPhases, cell);
+        if (!target) return nullptr;
+
+        FLOAT advance = 0;
+        DWRITE_GLYPH_RUN run{ face, size, 1, &index, &advance, nullptr, FALSE, 0 };
+        ID2D1RenderTarget* renderTarget = target->renderTarget.Get();
+        renderTarget->BeginDraw();
+        renderTarget->PushAxisAlignedClip(D2D1::RectF(0, 0, static_cast<float>(cell * GlyphPhases), static_cast<float>(cell)), D2D1_ANTIALIAS_MODE_ALIASED);
+        renderTarget->Clear(D2D1::ColorF(0, 0, 0, 0));
+        for (int phase = 0; phase < GlyphPhases; ++phase) {
+            D2D1_POINT_2F origin = D2D1::Point2F(cell * phase + originX + static_cast<float>(phase) / GlyphPhases,
+                originY + static_cast<float>(phaseY) / GlyphPhases);
+            renderTarget->DrawGlyphRun(origin, &run, target->white.Get(), DWRITE_MEASURING_MODE_NATURAL);
+        }
+        renderTarget->PopAxisAlignedClip();
+        HRESULT result = renderTarget->EndDraw();
+        if (result == D2DERR_RECREATE_TARGET) target->reset();
+        if (FAILED(result)) return nullptr;
+
+        WICRect lockArea{ 0, 0, cell * GlyphPhases, cell };
+        ComPtr<IWICBitmapLock> lock;
+        UINT stride = 0, bytes = 0;
+        BYTE* bits = nullptr;
+        if (FAILED(target->bitmap->Lock(&lockArea, WICBitmapLockRead, &lock)) || FAILED(lock->GetStride(&stride)) ||
+            FAILED(lock->GetDataPointer(&bytes, &bits))) {
+            return nullptr;
+        }
+        auto alphaAt = [&](int x, int y) {
+            return static_cast<uint8_t>(reinterpret_cast<const uint32_t*>(bits + static_cast<size_t>(y) * stride)[x] >> 24);
+        };
+
+        GlyphPositions positions;
+        for (int phase = 0; phase < GlyphPhases; ++phase) {
+            int minX = cell, minY = cell, maxX = -1, maxY = -1;
+            for (int y = 0; y < cell; ++y) {
+                for (int x = 0; x < cell; ++x) {
+                    if (!alphaAt(cell * phase + x, y)) continue;
+                    minX = std::min(minX, x);
+                    maxX = std::max(maxX, x);
+                    minY = std::min(minY, y);
+                    maxY = std::max(maxY, y);
+                }
+            }
+            if (maxX < 0) continue;
+
+            GlyphMask& glyph = positions[phase];
+            glyph.left = minX - static_cast<int>(originX);
+            glyph.top = minY - static_cast<int>(originY);
+            glyph.width = maxX - minX + 1;
+            glyph.height = maxY - minY + 1;
+            glyph.coverage.resize(static_cast<size_t>(glyph.width) * glyph.height);
+            for (int y = 0; y < glyph.height; ++y) {
+                for (int x = 0; x < glyph.width; ++x) glyph.coverage[static_cast<size_t>(y) * glyph.width + x] = alphaAt(cell * phase + minX + x, minY + y);
+            }
+            s.glyphBytes += glyph.coverage.size();
+        }
+
+        s.glyphFaces.emplace(face, face);
+        return &s.glyphs.emplace(key, std::move(positions)).first->second;
+    }
+
+    // Adds up the glyphs of a layout's runs into a mask, each from its drawing at the nearest fraction of a pixel
+    class GlyphCompositor : public IDWriteTextRenderer {
+    public:
+        GlyphCompositor(State& s, Mask& mask) : s(s), mask(mask) {}
+
+        bool failed = false;
+
+        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** object) override {
+            if (id == __uuidof(IUnknown) || id == __uuidof(IDWritePixelSnapping) || id == __uuidof(IDWriteTextRenderer)) {
+                *object = this;
+                return S_OK;
+            }
+            *object = nullptr;
+            return E_NOINTERFACE;
+        }
+        // Kept on the stack while the layout draws
+        ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+        ULONG STDMETHODCALLTYPE Release() override { return 1; }
+
+        HRESULT STDMETHODCALLTYPE IsPixelSnappingDisabled(void*, BOOL* disabled) override {
+            *disabled = FALSE;
+            return S_OK;
+        }
+        HRESULT STDMETHODCALLTYPE GetCurrentTransform(void*, DWRITE_MATRIX* transform) override {
+            *transform = { 1, 0, 0, 1, 0, 0 };
+            return S_OK;
+        }
+        HRESULT STDMETHODCALLTYPE GetPixelsPerDip(void*, FLOAT* pixels) override {
+            *pixels = 1;
+            return S_OK;
+        }
+        HRESULT STDMETHODCALLTYPE DrawUnderline(void*, FLOAT, FLOAT, const DWRITE_UNDERLINE*, IUnknown*) override { return S_OK; }
+        HRESULT STDMETHODCALLTYPE DrawStrikethrough(void*, FLOAT, FLOAT, const DWRITE_STRIKETHROUGH*, IUnknown*) override { return S_OK; }
+        HRESULT STDMETHODCALLTYPE DrawInlineObject(void*, FLOAT, FLOAT, IDWriteInlineObject*, BOOL, BOOL, IUnknown*) override { return S_OK; }
+
+        HRESULT STDMETHODCALLTYPE DrawGlyphRun(void*, FLOAT baselineX, FLOAT baselineY, DWRITE_MEASURING_MODE, const DWRITE_GLYPH_RUN* run,
+                const DWRITE_GLYPH_RUN_DESCRIPTION*, IUnknown*) override {
+            bool rightToLeft = (run->bidiLevel & 1) != 0;
+            float pen = baselineX;
+            for (UINT32 i = 0; i < run->glyphCount; ++i) {
+                float advance = run->glyphAdvances ? run->glyphAdvances[i] : 0;
+                if (rightToLeft) pen -= advance;
+                float offsetX = run->glyphOffsets ? run->glyphOffsets[i].advanceOffset : 0;
+                float x = pen + (rightToLeft ? -offsetX : offsetX);
+                float y = baselineY - (run->glyphOffsets ? run->glyphOffsets[i].ascenderOffset : 0);
+                if (!rightToLeft) pen += advance;
+
+                int pixelX = static_cast<int>(std::floor(x));
+                int pixelY = static_cast<int>(std::floor(y));
+                int phaseX = std::min(GlyphPhases - 1, static_cast<int>(std::lround((x - pixelX) * GlyphPhases)));
+                int phaseY = std::min(GlyphPhases - 1, static_cast<int>(std::lround((y - pixelY) * GlyphPhases)));
+                const GlyphPositions* positions = glyphPositions(s, run->fontFace, run->fontEmSize, run->glyphIndices[i], phaseY);
+                if (!positions) {
+                    failed = true;
+                    return E_FAIL;
+                }
+                add((*positions)[phaseX], pixelX, pixelY);
+            }
+            return S_OK;
+        }
+
+    private:
+        State& s;
+        Mask& mask;
+
+        // Saturating, so glyphs that touch add up like their outlines filled together
+        void add(const GlyphMask& glyph, int x, int y) {
+            for (int row = 0; row < glyph.height; ++row) {
+                int maskY = y + glyph.top + row;
+                if (maskY < 0 || maskY >= mask.height) continue;
+                const uint8_t* source = glyph.coverage.data() + static_cast<size_t>(row) * glyph.width;
+                uint8_t* destination = mask.coverage.data() + static_cast<size_t>(maskY) * mask.width;
+                for (int column = 0; column < glyph.width; ++column) {
+                    int maskX = x + glyph.left + column;
+                    if (maskX < 0 || maskX >= mask.width || source[column] == 0) continue;
+                    destination[maskX] = static_cast<uint8_t>(std::min(255, destination[maskX] + source[column]));
+                }
+            }
+        }
+    };
+
     // Draws a text's coverage into a mask: its whole box with the glyphs' overhang, whatever is clipped
     static bool renderMask(State& s, const std::string& text, const Font& font, int boxWidth, int boxHeight, TextAlignment alignment, Mask& mask) {
         ComPtr<IDWriteTextLayout> layout = layoutFor(s, text, font, static_cast<float>(std::max(0, boxWidth)), static_cast<float>(std::max(0, boxHeight)));
@@ -392,35 +573,9 @@ namespace Luwow::Udc::DirectWriteText {
         mask.width = std::max(1, std::max(0, boxWidth) + left + right);
         mask.height = std::max(1, std::max(0, boxHeight) + top + bottom);
 
-        Target* target = targetFor(s, mask.width, mask.height);
-        if (!target) return false;
-
-        ID2D1RenderTarget* renderTarget = target->renderTarget.Get();
-        renderTarget->BeginDraw();
-        renderTarget->PushAxisAlignedClip(D2D1::RectF(0, 0, static_cast<float>(mask.width), static_cast<float>(mask.height)), D2D1_ANTIALIAS_MODE_ALIASED);
-        renderTarget->Clear(D2D1::ColorF(0, 0, 0, 0));
-        renderTarget->DrawTextLayout(D2D1::Point2F(static_cast<float>(left), static_cast<float>(top)), layout.Get(), target->white.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
-        renderTarget->PopAxisAlignedClip();
-        HRESULT result = renderTarget->EndDraw();
-        if (result == D2DERR_RECREATE_TARGET) target->reset();
-        if (FAILED(result)) return false;
-
-        WICRect lockArea{ 0, 0, mask.width, mask.height };
-        ComPtr<IWICBitmapLock> maskLock;
-        UINT stride = 0, size = 0;
-        BYTE* bits = nullptr;
-        if (FAILED(target->bitmap->Lock(&lockArea, WICBitmapLockRead, &maskLock)) || FAILED(maskLock->GetStride(&stride)) ||
-            FAILED(maskLock->GetDataPointer(&size, &bits))) {
-            return false;
-        }
-
-        // White drawn premultiplied, so the alpha is the coverage
-        mask.coverage.resize(static_cast<size_t>(mask.width) * mask.height);
-        for (int y = 0; y < mask.height; ++y) {
-            const uint32_t* row = reinterpret_cast<const uint32_t*>(bits + static_cast<size_t>(y) * stride);
-            uint8_t* coverage = mask.coverage.data() + static_cast<size_t>(y) * mask.width;
-            for (int x = 0; x < mask.width; ++x) coverage[x] = static_cast<uint8_t>(row[x] >> 24);
-        }
+        mask.coverage.assign(static_cast<size_t>(mask.width) * mask.height, 0);
+        GlyphCompositor compositor(s, mask);
+        if (FAILED(layout->Draw(nullptr, &compositor, static_cast<float>(left), static_cast<float>(top))) || compositor.failed) return false;
         return true;
     }
 

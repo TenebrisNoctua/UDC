@@ -41,13 +41,23 @@ namespace Luwow::Udc {
     }
 
     ControlView::Entry::Entry(ControlView& view) : view(view), lock(view.luauHost) {
-        ++view.entryDepth;
+        if (++view.entryDepth == 1) view.invalidatedInEntry = false;
     }
 
-    // Changes are looked for once the paint or input is done, so no handler runs in the middle of it
+    // Changes are looked for once the paint or input is done, so no handler runs in the middle of it. When it
+    // asked for a repaint, they're looked for just before that paint, which shows what the handlers change.
     ControlView::Entry::~Entry() {
-        if (view.entryDepth == 1) view.checkWatched();
+        if (view.entryDepth == 1) {
+            if (view.invalidatedInEntry) view.watchPending = true;
+            else view.checkWatched();
+        }
         if (--view.entryDepth == 0) view.collect();
+    }
+
+    void ControlView::checkPendingWatched() {
+        if (!watchPending) return;
+        watchPending = false;
+        checkWatched();
     }
 
     void ControlView::watch(ControlObject& control) {
@@ -211,6 +221,7 @@ namespace Luwow::Udc {
 
     void ControlView::invalidate() {
         layoutDirty = true;
+        invalidatedInEntry = true;
         ++generation;
         surface->invalidate();
     }
@@ -219,8 +230,7 @@ namespace Luwow::Udc {
         if (source.pixels) {
             auto cached = pixelImages.find(source.pixels.get());
             if (cached != pixelImages.end() && !cached->second.first.expired()) return cached->second.second;
-
-            // Pixels a script replaced are dropped as new ones come
+            
             for (auto it = pixelImages.begin(); it != pixelImages.end();) {
                 it = it->second.first.expired() ? pixelImages.erase(it) : std::next(it);
             }
@@ -301,12 +311,20 @@ namespace Luwow::Udc {
 
     void ControlView::settle() {
         Entry entry(*this);
+        checkPendingWatched();
+        update();
+    }
+
+    void ControlView::preparePaint() {
+        Entry entry(*this);
+        checkPendingWatched();
         update();
     }
 
     // Controls paint in logical pixels, the scaled canvas turns them into device pixels
     void ControlView::paint(ICanvas& canvas) {
         Entry entry(*this);
+        checkPendingWatched();
         update();
         ScaledCanvas scaled(canvas, surface->scale());
         paintControl(scaled, *rootControl);
